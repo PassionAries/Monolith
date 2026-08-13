@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import process from "node:process";
 
 const projectRoot = process.cwd();
@@ -57,12 +58,37 @@ function parseArgs(argv) {
 }
 
 function runResult(command, args, extra = {}) {
-  return spawnSync(command, args, {
+  let actualCommand = command;
+  let actualArgs = args;
+
+  // Windows 下绕过 PowerShell / cmd 的命令解析
+  if (IS_WIN) {
+    if (command === "npx" && args[0] === "wrangler") {
+      // 直接执行项目本地 Wrangler
+      actualCommand = process.execPath;
+      actualArgs = [
+        resolve(projectRoot, "node_modules", "wrangler", "bin", "wrangler.js"),
+        ...args.slice(1),
+      ];
+    } else if (command === "npm") {
+      // Windows 下 npm 实际入口是 npm.cmd
+      actualCommand = resolve(
+        process.env.ProgramFiles || "C:\\Program Files",
+        "nodejs",
+        "npm.cmd",
+      );
+      actualArgs = args;
+    }
+  }
+
+  return spawnSync(actualCommand, actualArgs, {
     cwd: extra.cwd || projectRoot,
-    stdio: extra.stdio || (extra.input ? ["pipe", "inherit", "inherit"] : "inherit"),
+    stdio:
+      extra.stdio ||
+      (extra.input ? ["pipe", "inherit", "inherit"] : "inherit"),
     input: extra.input,
     encoding: "utf8",
-    shell: SHELL,
+    shell: false,
   });
 }
 
@@ -91,9 +117,12 @@ function runStep(title, command, args, extra = {}) {
   }
 }
 
-function runCapture(title, command, args) {
+function runCapture(title, command, args, extra = {}) {
   console.log(`\n==> ${title}`);
-  const result = runResult(command, args, { stdio: "pipe" });
+  const result = runResult(command, args, {
+    ...extra,
+    stdio: "pipe",
+  });
 
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
@@ -251,7 +280,12 @@ if (!options.skipServer) {
     "wrangler", "secret", "put", "JWT_SECRET", "--name", "monolith-server"
   ], { input: `${process.env.JWT_SECRET}\n`, cwd: `${projectRoot}/server` });
 
-  const deployOutput = runCapture("部署 Cloudflare Workers 后端", "npm", ["run", "deploy:server"]);
+const deployOutput = runCapture(
+  "部署 Cloudflare Workers 后端",
+  "npx",
+  ["wrangler", "deploy"],
+  { cwd: `${projectRoot}/server` }
+);
   if (!options.apiBase) {
     options.apiBase = detectWorkersUrl(deployOutput);
   }
@@ -295,7 +329,19 @@ if (!options.skipClient) {
     failStep("写入 Cloudflare Pages 的 API_BASE", "npx", pagesSecret);
   }
 
-  runStep("构建前端", "npm", ["run", "build"]);
+runStep(
+  "检查前端 TypeScript",
+  process.execPath,
+  [resolve(projectRoot, "node_modules", "typescript", "bin", "tsc")],
+  { cwd: clientRoot },
+);
+
+runStep(
+  "构建前端",
+  process.execPath,
+  [resolve(projectRoot, "node_modules", "vite", "bin", "vite.js"), "build"],
+  { cwd: clientRoot },
+);
   runStep("部署 Cloudflare Pages 前端", "npx", [
     "wrangler",
     "pages",
