@@ -37,17 +37,28 @@ function parseArgs(argv) {
 }
 
 function runWrangler(args, title) {
-  const result = spawnSync("npx", ["wrangler", ...args], {
+  const wranglerBin = resolve(
+    projectRoot,
+    "node_modules",
+    "wrangler",
+    "bin",
+    "wrangler.js",
+  );
+
+  const result = spawnSync(process.execPath, [wranglerBin, ...args], {
     cwd: serverRoot,
     encoding: "utf8",
-    shell: SHELL,
+    shell: false,
   });
 
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
 
   if (result.error || result.status !== 0) {
-    const detail = result.error ? result.error.message : `exit code ${result.status}`;
+    const detail = result.error
+      ? result.error.message
+      : `exit code ${result.status}`;
+
     console.error(`\n[error] ${title} 失败：${detail}`);
     process.exit(typeof result.status === "number" ? result.status : 1);
   }
